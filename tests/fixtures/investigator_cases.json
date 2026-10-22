@@ -1,0 +1,22 @@
+[
+  {"question":"Find my renewed auto insurance policy PDF","expected":"2026","kind":"answer"},
+  {"question":"When does the renewed auto policy expire?","expected":"December 31, 2026","kind":"answer"},
+  {"question":"When did the renewed auto policy take effect?","expected":"January 1, 2026","kind":"answer"},
+  {"question":"What is the renewed auto policy number?","expected":"DEMO-NEW-2611","kind":"answer"},
+  {"question":"Find the proof of insurance card","expected":"proof","kind":"answer"},
+  {"question":"When was the earlier auto policy due to expire?","expected":"December 31, 2025","kind":"answer"},
+  {"question":"What date is the corrected university welcome event scheduled for?","expected":"October 29","kind":"answer"},
+  {"question":"What time is the corrected university welcome event?","expected":"6 PM","kind":"answer"},
+  {"question":"Where is the university welcome event scheduled?","expected":"North Hall","kind":"answer"},
+  {"question":"What time did the original university invitation give?","expected":"5:30 PM","kind":"answer"},
+  {"question":"What was the one-year price in version 1 of the vendor proposal?","expected":"48,000","kind":"answer"},
+  {"question":"What is the one-year price in version 2 of the vendor proposal?","expected":"45,000","kind":"answer"},
+  {"question":"What two-year discount was in version 1?","expected":"7%","kind":"answer"},
+  {"question":"What two-year discount is in revised version 2?","expected":"10%","kind":"answer"},
+  {"question":"Find the revised vendor proposal PDF","expected":"proposal","kind":"answer"},
+  {"question":"Did Alex actually attend the university welcome event?","kind":"uncertain"},
+  {"question":"Has the vendor renewal been accepted and signed?","kind":"uncertain"},
+  {"question":"What does the missing contract appendix say about penalties?","kind":"uncertain"},
+  {"question":"Has the renewed auto policy been cancelled since it was issued?","kind":"uncertain"},
+  {"question":"What price did the vendor agree to for next year?","kind":"uncertain"}
+]

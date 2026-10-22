@@ -31,6 +31,7 @@ from email_reader.context import ApplicationContext
 from email_reader.contracts import AttachmentPayload
 from email_reader.drafts import draft_request, initial_draft
 from email_reader.image_types import is_mail_image, raster_mime
+from email_reader.investigation import InvestigationService
 from email_reader.mail_images import MailImageProvider
 from email_reader.mail_recovery import is_mail_timeout, recover_mail
 from email_reader.providers import (
@@ -130,9 +131,10 @@ class AppController(QObject):
     documentReady = Signal(str)
     recipientSuggestionsReady = Signal(str, str, str, "QVariantList")
 
-    def __init__(self, context: ApplicationContext) -> None:
+    def __init__(self, context: ApplicationContext, *, demo_mode: bool = False) -> None:
         super().__init__()
         self.context = context
+        self._demo_mode = demo_mode
         if hasattr(context, "register_shutdown"):
             context.register_shutdown(self.shutdown)
         self.mail_images = MailImageProvider(context.repository.blobs)
@@ -237,7 +239,7 @@ class AppController(QObject):
 
     @Slot()
     def _automatic_sync(self) -> None:
-        if getattr(self, "_closing", False) or self.context.sync.paused:
+        if getattr(self, "_demo_mode", False) or getattr(self, "_closing", False) or self.context.sync.paused:
             return
         if self.syncBusy:
             self.timer.start(1000)
@@ -289,6 +291,34 @@ class AppController(QObject):
         session = self._search_sessions.get(self._selected_account, {}).get(session_id, {})
         return session.get("preview", {})
 
+    @Property(str, notify=chatChanged)
+    def searchMode(self):
+        session_id = self._selected_searches.get(self._selected_account)
+        session = self._search_sessions.get(self._selected_account, {}).get(session_id, {})
+        return session.get("mode", "smart")
+
+    @Property(bool, constant=True)
+    def demoMode(self):
+        return self._demo_mode
+
+    @Property("QVariantMap", notify=chatChanged)
+    def investigationState(self):
+        session_id = self._selected_searches.get(self._selected_account)
+        session = self._search_sessions.get(self._selected_account, {}).get(session_id, {})
+        return session.get("investigation", {})
+
+    @Property(str, notify=navigationChanged)
+    def searchCoverage(self):
+        accounts = [account for account in self._accounts
+                    if account.get("enabled", True)
+                    and (not self._selected_account or account["id"] == self._selected_account)]
+        if not accounts:
+            return "No account is selected."
+        if any(not account.get("last_synced_at") for account in accounts):
+            return "At least one account has no completed refresh yet."
+        oldest = min(account["last_synced_at"] for account in accounts)
+        return f"Saved-mail refresh recorded: {oldest[:16].replace('T', ' ')} (oldest selected account)."
+
     @Property(bool, notify=busyChanged)
     def busy(self) -> bool:
         return self._busy
@@ -338,6 +368,7 @@ class AppController(QObject):
                 "title": "New search",
                 "messages": self._chats.get(scope, []),
                 "version": self._chat_versions.get(scope, uuid.uuid4().hex),
+                "mode": "smart",
             }
             self._selected_searches[scope] = session_id
         session = sessions[session_id]
@@ -362,8 +393,93 @@ class AppController(QObject):
             self.ask(question)
 
     @Slot(str)
+    def startInvestigation(self, question: str) -> None:
+        question = question.strip()
+        if not question or self.aiBusy:
+            return
+        scope = self._selected_account
+        self._selected_searches.pop(scope, None)
+        self._chats[scope] = []
+        self._chat_versions[scope] = uuid.uuid4().hex
+        session = self._search_session()
+        session["mode"] = "investigate"
+        session["investigation"] = {}
+        self.closeSearchSource()
+        self.chatChanged.emit()
+        self._investigate(question)
+
+    @Slot(int)
+    def startDemoReplay(self, index: int) -> None:
+        """Explicitly labeled, fixed fictional walkthrough; never calls AI or Mail."""
+        if not self._demo_mode or index not in (0, 1, 2):
+            return
+        from email_reader.demo import DEMO_QUESTIONS
+
+        specs = (
+            (("DEMO-OLD-2511", "DEMO-NEW-2611"),
+             ("The earlier fictional auto policy expired December 31, 2025.",
+              "The renewed policy lists expiration December 31, 2026.")),
+            (("October 28", "October 29"),
+             ("The university invitation originally listed October 28 at 5:30 PM.",
+              "A later correction schedules the event for October 29 at 6 PM in North Hall atrium.")),
+            (("VERSION 1", "VERSION 2"),
+             ("The earlier proposal lists $48,000 for one year and a 7% two-year discount.",
+              "The revised proposal lists $45,000 and a 10% two-year discount; it says it is not signed.")),
+        )
+        patterns, wording = specs[index]
+        citations = []
+        for pattern in patterns:
+            rows = self.context.database.query(
+                "SELECT c.id FROM source_chunks c JOIN threads t ON t.id=c.thread_id "
+                "WHERE t.trashed_at IS NULL AND c.content LIKE ? "
+                "AND (?=1 OR c.source_type='attachment') "
+                "AND c.chunk_index>=0 LIMIT 1", (f"%{pattern}%", int(index == 1)))
+            if not rows:
+                return
+            citation = self.context.repository.citation_for_chunk(rows[0]["id"])
+            if not citation:
+                return
+            payload = citation.model_dump(mode="json")
+            resolved = self.context.repository.resolve_source_link(citation.source_id)
+            if resolved:
+                payload["thread_id"], payload["message_id"] = resolved
+            citations.append(payload)
+        scope = self._selected_account
+        self._selected_searches.pop(scope, None)
+        self._chats[scope] = []
+        self._chat_versions[scope] = uuid.uuid4().hex
+        session = self._search_session()
+        session["mode"] = "replay"
+        session["title"] = DEMO_QUESTIONS[index]
+        session["investigation"] = {"status": "replay", "stage": "Recorded walkthrough",
+            "activity": [{"elapsed_seconds": 0, "stage": "Searched fictional saved mail", "count": 6},
+                         {"elapsed_seconds": 0, "stage": "Read the two cited sources", "count": 2},
+                         {"elapsed_seconds": 0, "stage": "Compared versions", "count": 2}]}
+        session["messages"].append({"role": "user", "text": DEMO_QUESTIONS[index]})
+        first, second = (item["source_id"] for item in citations)
+        answer_text = f"{wording[0]} [SOURCE:{first}]\n\n{wording[1]} [SOURCE:{second}]"
+        file_ids = []
+        for item in citations:
+            if item["source_type"] == "attachment":
+                row = self.context.database.query(
+                    "SELECT source_id FROM source_chunks WHERE id=?", (item["source_id"],))
+                if row:
+                    file_ids.append(row[0]["source_id"])
+        cards = self.context.repository.answer_file_cards(file_ids, [], question=DEMO_QUESTIONS[index])
+        session["messages"].append({"role": "assistant", "kind": "answer", "text": answer_text,
+            "citations": citations, "source_ids": [first, second], "attachment_ids": file_ids,
+            "file_cards": cards, "attachments": cards, "related_citations": [],
+            "related_attachments": [], "insufficient_evidence": False, "status": "replay"})
+        self.chatChanged.emit()
+
+    @Slot(str)
     def askFollowUp(self, question: str) -> None:
-        self.ask(question)
+        if self.searchMode == "investigate":
+            self._investigate(question)
+        elif self.searchMode == "replay":
+            self.startSearch(question)
+        else:
+            self.ask(question)
 
     @Slot(str)
     def selectSearch(self, session_id: str) -> None:
@@ -397,6 +513,9 @@ class AppController(QObject):
     @Slot()
     def cancelAI(self) -> None:
         if self.aiBusy:
+            session = self._pending_search
+            if session and session.get("mode") == "investigate":
+                self._finish_investigation_partial(session, "cancelled")
             for job in self._worker_jobs.values():
                 if job.get("lane") == "ai":
                     job["cancelled"] = True
@@ -740,7 +859,7 @@ class AppController(QObject):
 
     def _start_ai_enrichment(self) -> None:
         """Optional API indexing yields the exclusive AI lane to user requests."""
-        if self._closing:
+        if self._closing or self._demo_mode:
             return
         if (self.aiBusy or self._ai_enrichment_running or self.providerBusy
                 or getattr(self, "_active_backend", "") != "api"):
@@ -802,6 +921,15 @@ class AppController(QObject):
         job = self._worker_jobs.get(token)
         if not job or job.get("cancelled") or getattr(self, "_closing", False) or not isinstance(update, dict):
             return
+        if "investigation_event" in update:
+            session = self._pending_search
+            if session and session.get("mode") == "investigate":
+                state = session.setdefault("investigation", {})
+                state["stage"] = update["stage"]
+                state.setdefault("activity", []).append(update["investigation_event"])
+                citations = update.get("investigation_matches", [])
+                session["preview"] = {"citations": citations, "file_cards": []}
+                self.chatChanged.emit()
         self._set_activity(phase="running", **update)
         stage = str(update.get("stage") or job["label"])
         detail = str(update.get("detail") or "")
@@ -859,7 +987,11 @@ class AppController(QObject):
             self._sync_session = None
             self.context.sync.pause()
             message = "Import stopped safely after a local storage error; saved mail is unchanged"
-        if job["label"] == "Searching your email…":
+        if job["label"] == "Investigating saved mail…":
+            if self._pending_search is not None:
+                self._finish_investigation_partial(self._pending_search, "failed")
+            message = "Investigation stopped; review saved matches or retry"
+        if job["label"] in {"Searching your email…", "Investigating saved mail…"}:
             self._pending_search = None
         if job["label"] == "Syncing all accounts…":
             self._sync_failures += 1
@@ -1909,6 +2041,92 @@ class AppController(QObject):
                 self.chatChanged.emit()
         self._run("Searching your email…", work, done, reports_progress=True, ai=True)
 
+    def _finish_investigation_partial(self, session: dict, status: str) -> None:
+        state = session.setdefault("investigation", {})
+        if state.get("status") != "running":
+            return
+        state["status"] = status
+        preview = session.get("preview", {})
+        session["messages"].append({
+            "role": "assistant", "kind": "answer", "text": (
+                "Investigation stopped. Review the possible matches below."
+                if status == "cancelled" else
+                "Time is up. Review the possible matches below; I could not verify a cited answer."
+            ), "insufficient_evidence": True, "citations": [], "attachments": [],
+            "file_cards": [], "related_citations": preview.get("citations", []),
+            "related_attachments": [], "status": status,
+        })
+        session["preview"] = {}
+        self.chatChanged.emit()
+
+    def _investigate(self, question: str) -> None:
+        question = question.strip()
+        if not question or self.aiBusy:
+            return
+        scope = self._selected_account
+        session = self._search_session()
+        history = session["messages"]
+        previous = [{"role": item["role"], "text": item["text"]} for item in history[-6:]]
+        if not history:
+            session["title"] = question[:80]
+        history.append({"role": "user", "text": question, "citations": [], "attachments": []})
+        version = session["version"]
+        deadline = time.monotonic() + 60
+        session["investigation"] = {"status": "running", "stage": "Starting", "activity": []}
+        session["preview"] = {}
+        self._pending_search = session
+        self.chatChanged.emit()
+
+        def work(report):
+            service = InvestigationService(self.context.repository, self.context.search,
+                                           self.context.openai, self.context.settings)
+            result = service.investigate(question, account_id=scope or None,
+                                         history=previous, deadline=deadline, report=report,
+                                         cancelled=lambda: self._closing or
+                                         session["version"] != version)
+            answer = result["answer"]
+            hit_map = result["hits"]
+            def citation_payload(identifier):
+                payload = hit_map[identifier].model_dump(mode="json")
+                resolved = self.context.repository.resolve_source_link(identifier)
+                if resolved:
+                    payload["thread_id"], payload["message_id"] = resolved
+                return payload
+            files = self.context.repository.answer_file_cards(
+                answer.attachment_ids, answer.related_attachment_ids, question=question)
+            return {"answer": {**answer.model_dump(mode="json"), "kind": "answer", "role": "assistant",
+                    "citations": [citation_payload(i) for i in answer.source_ids if i in hit_map],
+                    "related_citations": [citation_payload(i) for i in answer.related_source_ids if i in hit_map],
+                    "attachments": [card for card in files if not card["possible_match"]],
+                    "related_attachments": [card for card in files if card["possible_match"]],
+                    "file_cards": files, "status": result["status"]},
+                    "activity": result["activity"], "status": result["status"]}
+
+        def done(payload):
+            if self._pending_search is session:
+                self._pending_search = None
+            if session["version"] != version or session["investigation"].get("status") != "running":
+                return
+            session["preview"] = {}
+            session["investigation"] = {"status": payload["status"], "stage": "Finished",
+                                         "activity": payload["activity"]}
+            history.append(payload["answer"])
+            if self._selected_account == scope and self.selectedSearchId == session["id"]:
+                self.chatChanged.emit()
+
+        self._run("Investigating saved mail…", work, done, reports_progress=True, ai=True)
+
+        def timed_out():
+            if session["version"] != version or session["investigation"].get("status") != "running":
+                return
+            self._finish_investigation_partial(session, "partial")
+            for job in self._worker_jobs.values():
+                if job.get("label") == "Investigating saved mail…" and job.get("lane") == "ai":
+                    job["cancelled"] = True
+            self.context.openai.cancel()
+            self._pending_search = None
+        QTimer.singleShot(max(0, int((deadline - time.monotonic()) * 1000)), timed_out)
+
     @Slot(str, bool)
     def setImportant(self, thread_id: str, value: bool) -> None:
         if self._selected_thread.get("id") == thread_id:
@@ -2075,6 +2293,9 @@ class AppController(QObject):
 
     @Slot(str, str, str)
     def connectAccount(self, provider_name: str, range_name: str, custom_date: str) -> None:
+        if self._demo_mode:
+            self._set_status("Account connections are disabled in the fictional demo")
+            return
         if self.providerBusy:
             return
         account_id = str(uuid.uuid4())
@@ -2095,6 +2316,9 @@ class AppController(QObject):
 
     @Slot(str, str)
     def importAppleMail(self, range_name: str, custom_date: str) -> None:
+        if self._demo_mode:
+            self._set_status("Mail import is disabled in the fictional demo")
+            return
         if self.providerBusy:
             return
         sync_from = self._sync_from(range_name, custom_date)
@@ -2160,6 +2384,9 @@ class AppController(QObject):
 
     @Slot()
     def retryOriginalsNow(self) -> None:
+        if self._demo_mode:
+            self._set_status("Provider requests are disabled in the fictional demo")
+            return
         accounts = list(self.context.repository.list_accounts())
         if not accounts or self._busy:
             return
@@ -2210,6 +2437,9 @@ class AppController(QObject):
 
     def _sync_all(self, *, force_original_retries: bool, force_drafts: bool = False,
                   automatic: bool = False) -> None:
+        if self._demo_mode:
+            self._set_status("Provider sync is disabled in the fictional demo")
+            return
         if self.syncBusy or self._closing:
             return
         if not self._accounts:

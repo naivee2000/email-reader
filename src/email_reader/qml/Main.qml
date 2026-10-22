@@ -62,6 +62,13 @@ ApplicationWindow {
         viewMode = "search"
         mailAssistant.ask(value)
     }
+    function investigateSearch(value) {
+        if (!value.trim().length || App.aiBusy) return
+        viewMode = "search"
+        mailAssistant.saveSessionView()
+        App.startInvestigation(value)
+        searchField.text = ""
+    }
     function showMailbox(id) {
         viewMode = "mail"; newMessageMode = false; selectedThreadId = ""
         App.filterMailbox(id)
@@ -356,6 +363,19 @@ ApplicationWindow {
                         onClicked: searchOptions.popup()
                         Menu {
                             id: searchOptions
+                            Menu {
+                                title: "Recorded demo walkthroughs"
+                                visible: App.demoMode
+                                MenuItem { text: "Find insurance documents"; onTriggered: { root.viewMode = "search"; App.startDemoReplay(0) } }
+                                MenuItem { text: "University event details"; onTriggered: { root.viewMode = "search"; App.startDemoReplay(1) } }
+                                MenuItem { text: "Compare revised proposals"; onTriggered: { root.viewMode = "search"; App.startDemoReplay(2) } }
+                            }
+                            MenuItem {
+                                text: "Investigate saved mail"
+                                objectName: "investigateAction"
+                                enabled: searchField.text.trim().length > 0 && !App.aiBusy
+                                onTriggered: root.investigateSearch(searchField.text)
+                            }
                             MenuItem {
                                 text: "Search offline by keyword"
                                 objectName: "offlineKeywordAction"

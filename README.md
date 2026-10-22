@@ -20,6 +20,8 @@ style examples, and original attachments are retained in encrypted local storage
   embedded signature images stay in the message and out of the main file list.
 - AI can use either the OpenAI Responses API (`store=False`) or the locally installed Codex CLI
   with the user's existing ChatGPT sign-in. Both paths validate structured JSON results.
+- Optional **Investigate** mode lets a bounded read-only agent search saved mail, inspect
+  conversations and extracted document pages, then return cited answers and exact file cards.
 
 ## Install on macOS
 
@@ -159,6 +161,46 @@ retrieval unless an API key is selected.
 - Conversations display newest first. Recognizable Gmail/Outlook quoted history is hidden by default;
   **Show full message including quoted history** restores the original. Inline and bottom-posted
   replies remain visible where quote markers distinguish them. No stored message is altered.
+
+### Email Investigator
+
+Enter a question in the top search field and choose **Search options → Investigate saved mail**.
+The agent can search the local index, read a matching conversation, list its attachments and inspect
+extracted pages or sheets. It can refine its search after seeing evidence. The Activity control shows
+the operations it actually performed, with source counts and elapsed time. It never follows
+instructions inside an email, changes provider mail or sends a message.
+
+Each run uses at most six read operations, three decision rounds and one answer call. It stops at
+60 seconds and keeps possible matches when an answer cannot be verified. **Cancel** stops it early.
+It reads only mail already saved by Email Reader; check the displayed refresh and indexing status
+when recent mail or document text may be missing. Smart search and offline keyword search remain
+available. Investigate uses the selected AI backend and existing usage settings; Codex sign-in does
+not require an OpenAI API key.
+
+For a public demonstration, run `python -m email_reader --demo`. This uses a separate fictional
+database and does not connect to mail providers. The search-options menu offers three clearly
+labeled **Recorded demo walkthroughs** that require no AI access. For a live demonstration using
+your existing AI sign-in, choose **Investigate saved mail** and ask one of these questions:
+
+- “Find my auto insurance documents and coverage end date”
+- “Where and when is the university welcome event?”
+- “Compare the old and revised vendor renewal proposals”
+
+The demo includes text-extractable policy and proposal PDFs, earlier versions, a correction to an
+event invitation and a deliberately unavailable attachment. Recorded walkthroughs replay fixed
+fictional findings; they are explicitly labeled in the app and are not live agent runs. The fixed
+20-question fictional evaluation is in `tests/fixtures/investigator_cases.json` and can be run with
+`python scripts/evaluate_investigator.py --output build/investigator-evaluation.json`. That command
+uses the locally signed-in Codex CLI and saves only fictional evaluation text under `build/`.
+In the recorded October 22, 2026 run, all 15 answerable cases and all five missing/conflicting-
+evidence cases passed. Every returned citation resolved to the fictional source, each case used
+one final-answer call, five cases performed a follow-up read or search, and the slowest case took
+26.05 seconds. The evaluation checks these fixed fixtures; it is not a guarantee for every mailbox.
+An alternating three-pair native navigation comparison with 300 fictional threads measured
+click-to-rendered-frame at +3.6% cold and -0.6% warm versus the previous build, within the
+10% regression limit. This measures reading navigation, not agent response time.
+
+![Recorded investigator walkthrough with fictional policy files](docs/images/investigator-recorded-walkthrough.png)
 
 Run `python scripts/check_email_ui.py` for a fictional-data UI regression check and
 `python scripts/check_search_workspace.py` for focused search-layout checks. On macOS the native

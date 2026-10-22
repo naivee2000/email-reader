@@ -205,8 +205,11 @@ class OpenAIService:
         input_text: str,
         model: str,
         max_output_tokens: int = 1800,
+        deadline: float | None = None,
     ) -> T:
         self._check_cancelled()
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("AI operation reached its deadline")
         backend = self.backend_name()
         if backend == "codex":
             return self._structured_codex(
@@ -215,6 +218,7 @@ class OpenAIService:
                 instructions=instructions,
                 input_text=input_text,
                 model=model,
+                deadline=deadline,
             )
         if backend != "api":
             raise RuntimeError(
@@ -228,6 +232,7 @@ class OpenAIService:
             input_text=input_text,
             model=model,
             max_output_tokens=max_output_tokens,
+            deadline=deadline,
         )
 
     def _structured_api(
@@ -239,11 +244,18 @@ class OpenAIService:
         input_text: str,
         model: str,
         max_output_tokens: int,
+        deadline: float | None = None,
     ) -> T:
         estimated_input = self._token_estimate(instructions + input_text)
         self.usage.ensure_allowed(model, estimated_input, max_output_tokens)
         schema = self._strict_schema(output_type)
-        response = self._client().responses.create(
+        client = self._client()
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("AI operation reached its deadline")
+            client = client.with_options(timeout=max(0.2, min(30.0, remaining)), max_retries=0)
+        response = client.responses.create(
             model=model,
             instructions=instructions,
             input=input_text,
@@ -274,6 +286,7 @@ class OpenAIService:
         instructions: str,
         input_text: str,
         model: str,
+        deadline: float | None = None,
     ) -> T:
         if not self.codex_executable:
             raise RuntimeError("Codex CLI was not found on this Mac")
@@ -318,7 +331,8 @@ class OpenAIService:
                 "-",
             ]
             try:
-                process = self._run_codex(command, prompt)
+                process = (self._run_codex(command, prompt, deadline=deadline)
+                           if deadline is not None else self._run_codex(command, prompt))
             except subprocess.TimeoutExpired as exc:
                 raise RuntimeError("Local Codex timed out after four minutes") from exc
             if process.returncode:
@@ -343,7 +357,7 @@ class OpenAIService:
                 return str(item.get("text", "")).strip()
         return ""
 
-    def _run_codex(self, command: list[str], prompt: str) -> subprocess.CompletedProcess:
+    def _run_codex(self, command: list[str], prompt: str, *, deadline: float | None = None) -> subprocess.CompletedProcess:
         process = process_launch.Popen(
             command,
             stdin=subprocess.PIPE,
@@ -357,6 +371,8 @@ class OpenAIService:
         try:
             while True:
                 self._check_cancelled()
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError("AI operation reached its deadline")
                 try:
                     stdout, stderr = process.communicate(input=pending_input, timeout=0.2)
                     self._check_cancelled()

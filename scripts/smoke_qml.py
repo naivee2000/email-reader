@@ -24,8 +24,10 @@ def main() -> int:
     application = QGuiApplication([])
     context = ApplicationContext.create(testing=True)
     populate_demo(context.repository)
-    controller = AppController(context)
-    controller.selectThread(controller.threads[0]["id"])
+    demo_capture = os.environ.get("EMAIL_READER_SMOKE_DEMO") == "1"
+    controller = AppController(context, demo_mode=demo_capture)
+    if controller.threads:
+        controller.selectThread(controller.threads[0]["id"])
     controller.setParent(application)
     engine = QQmlApplicationEngine(application)
     engine.rootContext().setContextProperty("App", controller)
@@ -34,6 +36,12 @@ def main() -> int:
     )
     if not engine.rootObjects():
         raise RuntimeError("QML failed to load")
+    if demo_capture:
+        controller.startDemoReplay(0)
+        window = engine.rootObjects()[0]
+        window.setWidth(int(os.environ.get("EMAIL_READER_SMOKE_WIDTH", "1366")))
+        window.setHeight(int(os.environ.get("EMAIL_READER_SMOKE_HEIGHT", "900")))
+        window.setProperty("viewMode", "search")
 
     def finish() -> None:
         screenshot = os.environ.get("EMAIL_READER_SMOKE_SCREENSHOT")

@@ -14,6 +14,7 @@ Rectangle {
     property bool showSources: false
     property bool showPossible: false
     property bool showHistory: false
+    property bool showActivity: false
     property int selectedTurn: -1
     property var sessionViews: ({})
     property string displayedViewKey: ""
@@ -144,7 +145,9 @@ Rectangle {
         const value = followUp.text.trim()
         if (!value || App.aiBusy) return
         followUp.text = ""
-        if (messages.length) App.askFollowUp(value); else App.startSearch(value)
+        if (messages.length) App.askFollowUp(value)
+        else if (App.searchMode === "investigate") App.startInvestigation(value)
+        else App.startSearch(value)
     }
     function openSource(link) {
         if (link && link.startsWith("emailreader://source/")) App.openSearchSource(link)
@@ -164,7 +167,7 @@ Rectangle {
         RowLayout {
             Layout.fillWidth: true; spacing: 8
             AppButton { objectName: "searchBack"; iconName: "back"; text: "Inbox"; flat: true; compact: true; Accessible.name: "Return to Inbox"; onClicked: workspace.backRequested() }
-            Label { text: "Search"; color: Theme.text; font.pixelSize: 20; font.weight: Font.DemiBold; Layout.fillWidth: true }
+            Label { text: App.searchMode === "investigate" ? "Investigate" : (App.searchMode === "replay" ? "Recorded walkthrough" : "Search"); color: Theme.text; font.pixelSize: 20; font.weight: Font.DemiBold; Layout.fillWidth: true }
             AppButton {
                 objectName: "searchHistory"; text: "History"; iconName: "history"; flat: true; compact: true
                 enabled: App.searchSessions.length > 0; onClicked: historyMenu.popup()
@@ -189,6 +192,9 @@ Rectangle {
             AppButton { objectName: "newSearch"; text: "New search"; compact: true; onClicked: workspace.ask("") }
         }
         Label { text: App.selectedAccount ? "Searching the selected account" : "Searching all accounts"; color: Theme.secondary; font.pixelSize: 13 }
+        Label { visible: App.searchMode === "investigate"; text: "Uses saved mail only. Results may be incomplete if mail has not synced or files are still indexing."; color: Theme.secondary; font.pixelSize: 13; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        Label { visible: App.searchMode === "investigate"; text: App.searchCoverage; color: Theme.secondary; font.pixelSize: 12; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        Label { visible: App.searchMode === "replay"; text: "Recorded demonstration with fictional mail. No AI was called for this walkthrough."; color: Theme.secondary; font.pixelSize: 13; wrapMode: Text.Wrap; Layout.fillWidth: true }
         Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: Theme.border }
         RowLayout {
             Layout.fillWidth: true; Layout.fillHeight: true; spacing: 20
@@ -213,7 +219,22 @@ Rectangle {
                         }
                         AppButton { visible: workspace.selectedTurn >= 0; text: "Back to latest answer"; iconName: "back"; flat: true; compact: true; onClicked: workspace.resetAnswer() }
                         Label { objectName: "searchQuestionTitle"; visible: !!workspace.currentQuestion; text: workspace.currentQuestion; textFormat: Text.PlainText; color: Theme.text; font.pixelSize: 18; font.weight: Font.DemiBold; wrapMode: Text.Wrap; Layout.fillWidth: true }
-                        Label { objectName: "localPreviewLabel"; visible: !workspace.answer.text && workspace.pendingMatches.length > 0; text: "Local matches — relevance not yet checked"; color: Theme.secondary; font.pixelSize: 13; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                        RowLayout {
+                            visible: (App.searchMode === "investigate" || App.searchMode === "replay") && !!App.investigationState.stage
+                            Layout.fillWidth: true
+                            Label { text: App.investigationState.stage || ""; color: Theme.secondary; font.pixelSize: 13; Layout.fillWidth: true }
+                            AppButton { text: workspace.showActivity ? "Hide activity" : "Activity (" + ((App.investigationState.activity || []).length) + ")"; flat: true; compact: true; onClicked: workspace.showActivity = !workspace.showActivity }
+                        }
+                        Repeater {
+                            model: workspace.showActivity ? (App.investigationState.activity || []) : []
+                            delegate: Label {
+                                required property var modelData
+                                text: modelData.elapsed_seconds + "s · " + modelData.stage + (modelData.count ? " · " + modelData.count + " results" : "")
+                                textFormat: Text.PlainText; color: Theme.secondary; font.pixelSize: 12
+                                Layout.fillWidth: true
+                            }
+                        }
+                        Label { objectName: "localPreviewLabel"; visible: !workspace.answer.text && workspace.pendingMatches.length > 0; text: "Possible matches — relevance not yet checked"; color: Theme.secondary; font.pixelSize: 13; wrapMode: Text.Wrap; Layout.fillWidth: true }
                         Repeater {
                             model: !workspace.answer.text ? workspace.pendingMatches : []
                             delegate: ColumnLayout {

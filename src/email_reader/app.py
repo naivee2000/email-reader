@@ -461,7 +461,7 @@ ApplicationWindow {
     if args.demo:
         populate_demo(context.repository)
     controller_started = time.perf_counter()
-    controller = AppController(context)
+    controller = AppController(context, demo_mode=args.demo)
     startup_parts["controller"] = time.perf_counter() - controller_started
     controller.setParent(app)
     def close_context():
